@@ -1,6 +1,7 @@
 import re
 from datetime import datetime
 
+from django.conf import settings
 
 class BaseParser(object):
     """
@@ -100,14 +101,27 @@ class NginxRequestTimesParser(BaseParser):
             newdata = m.groupdict()
             data.update(newdata)
 
-        # If the upstream response was '-' then Nginx bailed out and didn't wait
-        # Assume it's some high value
-        if data['upstream_response_time'] == '-':
-            data['upstream_response_time'] = '90'
+        data['request_time'] = float(data['request_time'])
 
-        # Convert the times to floats
-        for time_label in ['request_time', 'upstream_response_time']:
-            data[time_label] = float(data[time_label])
+        # If the upstream response was '-' then Nginx bailed out and didn't wait
+        if data['upstream_response_time'] == '-':
+            # TODO: This should really be factored out to a conf module with
+            # a proper default in one place.
+            slow_threshold = getattr(settings, 'MO_SLOW_PAGE_SECONDS', 7.0)
+
+            # If the response is a 499 and the page wasn't slow, then the
+            # user probably bailed for a reason other than the page being slow.
+            # Usually, this is because of a double-click, so let's set the
+            # upstream time to the request time, effectively ignoring this
+            # request for slowness purposes
+            if (data['status'] == '499'and
+                data['request_time'] < slow_threshold):
+                data['upstream_response_time'] = data['request_time']
+            else:
+                data['upstream_response_time'] = 90.0
+        else:
+            data['upstream_response_time'] = float(
+                data['upstream_response_time'])
 
         return data
 
